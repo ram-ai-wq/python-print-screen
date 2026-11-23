@@ -24,6 +24,20 @@ def test_config_valid_and_invalid_values(tmp_path):
     assert cfg.save_folder == "/x"
 
 
+def test_config_evidence_settings(tmp_path):
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps({"evidence_folder": str(tmp_path / "ev"), "tester": "ana",
+                                "report_formats": ["PDF", "html", "pdf"], "stamp_images": False,
+                                "ask_step_details": "yes"}))
+    cfg = load_config(path)
+    assert cfg.evidence_root() == tmp_path / "ev" and cfg.tester == "ana"
+    assert cfg.report_formats == ["pdf", "html"]  # normalised and de-duplicated
+    assert cfg.stamp_images is False
+    assert cfg.ask_step_details is True  # invalid -> default
+    path.write_text(json.dumps({"report_formats": ["docx"]}))
+    assert load_config(path).report_formats == ["html", "pdf", "md"]
+
+
 def test_config_corrupt_file_falls_back(tmp_path):
     path = tmp_path / "c.json"
     path.write_text("{not json")

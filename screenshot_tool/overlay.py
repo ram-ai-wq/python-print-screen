@@ -10,6 +10,7 @@ from PyQt6.QtGui import (
     QColor,
     QCursor,
     QFontMetrics,
+    QGuiApplication,
     QImage,
     QKeyEvent,
     QMouseEvent,
@@ -18,15 +19,17 @@ from PyQt6.QtGui import (
     QPixmap,
     QRegion,
 )
-from PyQt6.QtWidgets import QFileDialog, QLineEdit, QMessageBox, QWidget
+from PyQt6.QtWidgets import QDialog, QFileDialog, QLabel, QLineEdit, QMessageBox, QWidget
 
 from .capture import Snapshot, logical_to_pixel_rect, normalize_rect
 from .config import Config
+from .evidence import EvidenceError, EvidenceSession
 from .storage import StorageError, compose_image, copy_to_clipboard, default_filename, save_image
 from .toolbar import ActionBar, Toast, ToolBar
 from .tools import (
     Annotation,
     History,
+    StepBadgeAnnotation,
     TextAnnotation,
     ToolKind,
     create_annotation,
@@ -87,6 +90,12 @@ def move_rect(rect: QRect, dx: int, dy: int, bounds: QRect) -> QRect:
     return QRect(x, y, rect.width(), rect.height())
 
 
+def _escape(text: str) -> str:
+    from html import escape
+
+    return escape(text)
+
+
 class Mode(Enum):
     """Current mouse interaction."""
 
@@ -120,11 +129,30 @@ class TextInput(QLineEdit):
 
 
 class OverlayWindow(QWidget):
-    """Frameless window covering the virtual desktop showing the frozen snapshot."""
+    """Frameless window covering the virtual desktop showing the frozen snapshot.
+
+    Modes:
+        * plain: copy to the clipboard or save to a file;
+        * evidence (``session`` given): Enter/the primary button adds the selection
+          as a numbered step of the session;
+        * output (``output_path`` given): Enter/the primary button writes the image
+          to that path and closes (used when an AI agent asks the tester to capture).
+    """
 
     closed = pyqtSignal()
+    stepAdded = pyqtSignal(object)  # EvidenceStep
+    outputSaved = pyqtSignal(str)
 
-    def __init__(self, snapshot: Snapshot, config: Config) -> None:
+    def __init__(
+        self,
+        snapshot: Snapshot,
+        config: Config,
+        *,
+        session: EvidenceSession | None = None,
+        output_path: str | None = None,
+        prompt: str = "",
+        default_status: str = "passed",
+    ) -> None:
         super().__init__(
             None,
             Qt.WindowType.FramelessWindowHint
@@ -164,10 +192,25 @@ class OverlayWindow(QWidget):
         self._text_edit: TextInput | None = None
         self._text_ctx: tuple[QColor, int] = (self._color, self._width)
         self._closing = False
+        self._session = session
+        self._output_path = output_path
+        self._prompt = prompt.strip()
+        self._default_status = default_status
 
+        primary_tip = ""
+        if output_path:
+            primary_tip = "Done – send this capture (Enter)"
+        elif session is not None:
+            primary_tip = "Add to evidence as the next step (Enter)"
         self._tools = ToolBar(self, self._color, self._width)
-        self._actions = ActionBar(self)
+        self._actions = ActionBar(self, primary_tip)
         self._toast = Toast(self)
+        self._hint = QLabel(self)
+        self._hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._hint.setStyleSheet(
+            "background: rgba(20,20,20,225); color: white; border-radius: 6px;"
+            "padding: 7px 12px; font-size: 13px;"
+        )
         self._tools.hide()
         self._actions.hide()
         self._tools.toolChanged.connect(self._on_tool_changed)
@@ -175,11 +218,13 @@ class OverlayWindow(QWidget):
         self._tools.thicknessChanged.connect(self._on_width_changed)
         self._tools.undoRequested.connect(self.undo)
         self._tools.redoRequested.connect(self.redo)
+        self._actions.primaryRequested.connect(self.primary_action)
         self._actions.copyRequested.connect(self.copy)
         self._actions.saveRequested.connect(self.save)
         self._actions.closeRequested.connect(self.close)
 
         self.setGeometry(snapshot.rect)
+        self._update_hint()
 
     # ------------------------------------------------------------------ public API
     def show_overlay(self) -> None:
@@ -249,6 +294,110 @@ class OverlayWindow(QWidget):
         self._config.save_folder = str(saved.parent)
         self._config.save()
         self._toast_and_close(f"Saved {saved.name}")
+
+    def primary_action(self) -> None:
+        """Enter / the highlighted button: add an evidence step or deliver the output file."""
+        if self._output_path:
+            self.save_output()
+        elif self._session is not None:
+            self.add_to_evidence()
+
+    def add_to_evidence(self) -> None:
+        """Ask for the step details, save the selection as the session's next step, close."""
+        if not self._confirmed or self._session is None or self._closing:
+            return
+        try:
+            image = self.render_result()
+        except StorageError as exc:
+            self._warn(str(exc))
+            return
+        details = {"title": "", "status": self._default_status}
+        if self._config.ask_step_details:
+            from .session_ui import StepDialog  # local import: session_ui imports this module's peers
+
+            dialog = StepDialog(self, number=self._next_step_number(), session_label=self._session.label,
+                                status=self._default_status, preview=image)
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            self.activateWindow()
+            self.setFocus()
+            if not accepted:
+                return
+            details = dialog.values()
+        try:
+            step = self._session.add_step(image, source="manual", **details)
+        except EvidenceError as exc:
+            self._warn(str(exc))
+            return
+        self.stepAdded.emit(step)
+        self._toast_and_close(f"Step {step.number} added · {step.status.upper()}")
+
+    def save_output(self) -> None:
+        """Write the selection to ``output_path`` (PNG) and close."""
+        if not self._confirmed or not self._output_path or self._closing:
+            return
+        try:
+            saved = save_image(self.render_result(), self._output_path)
+        except StorageError as exc:
+            self._warn(str(exc))
+            return
+        self.outputSaved.emit(str(saved))
+        self._toast_and_close("Sent to the AI agent")
+
+    def select_screen(self) -> None:
+        """Select the whole monitor under the mouse cursor (Ctrl+A)."""
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        rect = screen.geometry().translated(-self._snap.rect.topLeft()).intersected(self.rect())
+        if rect.isEmpty():
+            return
+        self._finish_text(commit=True)
+        if self._sel != rect:
+            self._history.clear()
+            self._after_history_change()
+        self._mode = Mode.IDLE
+        self._confirmed = True
+        self._set_selection(rect)
+        self._layout_toolbars()
+        self._update_hint()
+        self.update()
+
+    def _next_step_number(self) -> int:
+        if self._session is None:
+            return 1
+        try:
+            self._session.reload()
+        except EvidenceError:
+            pass
+        return len(self._session.steps) + 1
+
+    # ------------------------------------------------------------------ hint banner
+    def _update_hint(self) -> None:
+        """Top banner: agent instructions, active session and keyboard hints."""
+        lines = []
+        if self._prompt:
+            lines.append(f"<b>AI agent request:</b> {_escape(self._prompt)}")
+        if self._session is not None:
+            lines.append(f"<b>Evidence:</b> {_escape(self._session.label)} — next: step {self._next_step_number()}")
+        keys = "Drag to select · Ctrl+A whole screen · Esc cancel"
+        if self._output_path or self._session is not None:
+            keys += " · Enter " + ("send" if self._output_path else "add step")
+        lines.append(f"<span style='color:#c7c7cc'>{keys}</span>")
+        if self._confirmed and not self._prompt and self._session is None:
+            self._hint.hide()
+            return
+        self._hint.setText("<br>".join(lines))
+        self._hint.adjustSize()
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        area = self.rect()
+        if screen is not None:
+            on_screen = screen.geometry().translated(-self._snap.rect.topLeft()).intersected(self.rect())
+            if not on_screen.isEmpty():
+                area = on_screen
+        x = area.x() + (area.width() - self._hint.width()) // 2
+        self._hint.move(max(0, x), area.y() + 16)
+        self._hint.show()
+        self._hint.raise_()
 
     # ------------------------------------------------------------------ geometry
     def _scale(self) -> tuple[float, float]:
@@ -480,6 +629,10 @@ class OverlayWindow(QWidget):
                     self._current = create_annotation(
                         self._tool, self._clamp_to_sel(pos), self._color, self._width
                     )
+                    if isinstance(self._current, StepBadgeAnnotation):
+                        self._current.number = 1 + sum(
+                            isinstance(a, StepBadgeAnnotation) for a in self._history.items
+                        )
                     self._mode = Mode.DRAWING
                     self.update(self._sel)
                 else:
@@ -530,6 +683,7 @@ class OverlayWindow(QWidget):
                 self._confirmed = True
                 self._layout_toolbars()
                 self.update(sel.adjusted(-60, -60, 60, 60))
+            self._update_hint()
         elif mode is Mode.DRAWING:
             item, self._current = self._current, None
             if item is not None and item.is_valid():
@@ -548,6 +702,10 @@ class OverlayWindow(QWidget):
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
         if key == Qt.Key.Key_Escape:
             self.close()
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.primary_action()
+        elif ctrl and key == Qt.Key.Key_A:
+            self.select_screen()
         elif ctrl and key == Qt.Key.Key_Z and not shift:
             self.undo()
         elif ctrl and (key == Qt.Key.Key_Y or (key == Qt.Key.Key_Z and shift)):

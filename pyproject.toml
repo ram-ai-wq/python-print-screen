@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "screenshot-tool"
+dynamic = ["version"]
+description = "Screenshot + annotation tool that records QA test evidence, for manual testers and AI agents (MCP)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.7",
+    "mss>=9.0",
+    "Pillow>=10.1",
+    "pynput>=1.7",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2.3,<3"]
+dev = ["pytest>=8", "mcp>=2.3,<3"]
+
+[project.gui-scripts]
+screenshot-tool = "screenshot_tool.__main__:main"
+
+[project.scripts]
+screenshot-tool-mcp = "screenshot_tool.mcp_server:main"
+screenshot-evidence = "screenshot_tool.cli:main"
+
+[tool.setuptools]
+packages = ["screenshot_tool"]
+
+[tool.setuptools.package-data]
+screenshot_tool = ["assets/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "screenshot_tool.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

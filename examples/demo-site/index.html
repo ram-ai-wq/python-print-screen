@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Demo Shop – Sign in</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 "Segoe UI", system-ui, sans-serif; background: #f3f5f8; color: #1f2328; }
+  header { background: #1b2a41; color: #fff; padding: 14px 32px; display: flex; align-items: center; gap: 12px; }
+  header .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #4f8cff, #7c5cff); }
+  header b { font-size: 18px; letter-spacing: .2px; }
+  header nav { margin-left: auto; opacity: .8; font-size: 14px; display: flex; gap: 22px; }
+  main { display: flex; justify-content: center; padding: 56px 16px; }
+  .card { width: 420px; background: #fff; border: 1px solid #d8dee6; border-radius: 12px; padding: 32px; box-shadow: 0 6px 24px rgba(27,42,65,.08); }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  p.sub { margin: 0 0 24px; color: #59636e; }
+  label { display: block; font-weight: 600; margin: 14px 0 6px; font-size: 14px; }
+  input { width: 100%; padding: 10px 12px; border: 1px solid #c7ced6; border-radius: 8px; font: inherit; }
+  button { margin-top: 22px; width: 100%; padding: 11px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: 600 15px "Segoe UI", sans-serif; cursor: pointer; }
+  .error { display: none; margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #fdecec; color: #b42318; border: 1px solid #f5c2c0; font-size: 14px; }
+  .welcome { display: none; }
+  .welcome h1 { font-size: 26px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 18px; }
+  .tile { background: #f6f8fa; border: 1px solid #e1e6ec; border-radius: 10px; padding: 14px; }
+  .tile b { display: block; font-size: 20px; }
+</style>
+</head>
+<body>
+<header><div class="logo"></div><b>Demo Shop</b><nav><span>Catalog</span><span>Deals</span><span>Help</span></nav></header>
+<main>
+  <div class="card" id="login">
+    <h1>Sign in</h1>
+    <p class="sub">Use your shop account to continue.</p>
+    <form id="form">
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="••••••••" autocomplete="current-password">
+      <button type="submit">Sign in</button>
+      <div class="error" id="error" role="alert">Invalid email or password. Please try again.</div>
+    </form>
+  </div>
+  <div class="card welcome" id="welcome">
+    <h1>Welcome back, Ana!</h1>
+    <p class="sub">You are signed in as ana@example.com</p>
+    <div class="tiles"><div class="tile"><b>3</b>Open orders</div><div class="tile"><b>12</b>Wishlist</div><div class="tile"><b>$40</b>Credit</div></div>
+  </div>
+</main>
+<script>
+document.getElementById('form').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var ok = document.getElementById('email').value === 'ana@example.com' && document.getElementById('password').value === 'correct-horse';
+  document.getElementById('error').style.display = ok ? 'none' : 'block';
+  if (ok) { document.getElementById('login').style.display = 'none'; document.getElementById('welcome').style.display = 'block'; }
+});
+</script>
+</body>
+</html>

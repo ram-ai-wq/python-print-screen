@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 APP_DIR_NAME = "screenshot_tool"
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+REPORT_FORMATS = ("html", "pdf", "md")
 
 
 def default_config_path() -> Path:
@@ -36,9 +37,16 @@ class Config:
     default_color: str = "#ff3b30"
     thickness: int = 4
     save_folder: str = ""
+    evidence_folder: str = ""
+    tester: str = ""
+    report_formats: list[str] = field(default_factory=lambda: list(REPORT_FORMATS))
+    stamp_images: bool = True
+    ask_step_details: bool = True
+    active_session: str = ""
     path: Path = field(default_factory=default_config_path, repr=False, compare=False)
 
-    _KEYS = ("hotkey", "default_color", "thickness", "save_folder")
+    _KEYS = ("hotkey", "default_color", "thickness", "save_folder", "evidence_folder", "tester",
+             "report_formats", "stamp_images", "ask_step_details", "active_session")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialisable view of the persisted fields."""
@@ -63,6 +71,14 @@ class Config:
         pictures = Path.home() / "Pictures"
         return pictures if pictures.is_dir() else Path.home()
 
+    def evidence_root(self) -> Path:
+        """Folder that holds evidence sessions (default ``<Documents>/QA-Evidence``)."""
+        if self.evidence_folder:
+            return Path(self.evidence_folder).expanduser()
+        from .evidence import default_evidence_root  # local import keeps config lightweight
+
+        return default_evidence_root()
+
 
 def _coerce(data: dict[str, Any]) -> dict[str, Any]:
     """Keep only valid values from raw JSON data."""
@@ -85,11 +101,27 @@ def _coerce(data: dict[str, Any]) -> dict[str, Any]:
     elif "thickness" in data:
         log.warning("Ignoring invalid 'thickness' (expected integer 1-50)")
 
-    folder = data.get("save_folder")
-    if isinstance(folder, str):
-        out["save_folder"] = folder
-    elif "save_folder" in data:
-        log.warning("Ignoring invalid 'save_folder'")
+    for key in ("save_folder", "evidence_folder", "tester", "active_session"):
+        value = data.get(key)
+        if isinstance(value, str):
+            out[key] = value
+        elif key in data:
+            log.warning("Ignoring invalid '%s'", key)
+
+    for key in ("stamp_images", "ask_step_details"):
+        value = data.get(key)
+        if isinstance(value, bool):
+            out[key] = value
+        elif key in data:
+            log.warning("Ignoring invalid '%s' (expected true or false)", key)
+
+    formats = data.get("report_formats")
+    if isinstance(formats, list) and formats and all(
+        isinstance(f, str) and f.lower() in REPORT_FORMATS for f in formats
+    ):
+        out["report_formats"] = list(dict.fromkeys(f.lower() for f in formats))
+    elif "report_formats" in data:
+        log.warning("Ignoring invalid 'report_formats' (expected a list of %s)", ", ".join(REPORT_FORMATS))
     return out
 
 

@@ -2,5 +2,7 @@ PyQt6==6.7.1
 mss==9.0.1
 Pillow==10.4.0
 pynput==1.7.7
+# MCP server for AI agents (python -m screenshot_tool mcp)
+mcp==2.3.0
 # development / tests
 pytest==8.3.2

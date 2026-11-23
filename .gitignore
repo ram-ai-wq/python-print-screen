@@ -6,3 +6,6 @@ venv/
 build/
 dist/
 *.spec
+*.egg-info/
+# evidence sessions written by the examples (may contain sensitive screenshots)
+/evidence/

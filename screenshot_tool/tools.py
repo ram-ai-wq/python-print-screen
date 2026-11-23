@@ -1,4 +1,5 @@
-"""Annotation primitives: arrow, rectangle, pen, marker, text, and undo history.
+"""Annotation primitives: arrow, rectangle, pen, marker, text, redaction, step
+badges, and undo history.
 
 Every annotation paints itself in *logical* coordinates through a ``QPainter``.
 The overlay uses the same code for live preview and for the final render (under a
@@ -34,7 +35,11 @@ class ToolKind(str, Enum):
     PEN = "pen"
     MARKER = "marker"
     TEXT = "text"
+    REDACT = "redact"
+    STEP = "step"
 
+
+REDACT_COLOR = QColor("#111111")
 
 def arrow_geometry(start: Point, end: Point, width: float) -> tuple[Point, list[Point]]:
     """Compute arrow geometry for a line of the given thickness.
@@ -216,8 +221,67 @@ class TextAnnotation(Annotation):
         p.drawText(QPointF(self.pos.x(), self.pos.y() + ascent), self.text)
 
 
+class RedactAnnotation(RectAnnotation):
+    """Opaque box that hides sensitive data (passwords, personal data, tokens).
+
+    The box is solid, not blurred, so the hidden content cannot be recovered.
+    """
+
+    def __init__(self, pos: QPointF, color: QColor | None = None, width: float = 0) -> None:
+        fill = QColor(color) if color is not None else QColor(REDACT_COLOR)
+        fill.setAlpha(255)
+        super().__init__(pos, fill, width)
+
+    def is_valid(self) -> bool:
+        return abs(self.p1.x() - self.p0.x()) >= 3 and abs(self.p1.y() - self.p0.y()) >= 3
+
+    def paint(self, p: QPainter) -> None:
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(self.color))
+        p.drawRect(QRectF(self.p0, self.p1).normalized())
+
+
+def badge_radius(width: float) -> float:
+    """Radius of a step badge for the given thickness setting."""
+    return max(11.0, 8.0 + width * 1.6)
+
+
+class StepBadgeAnnotation(Annotation):
+    """Numbered circle marking the order of actions (1, 2, 3...)."""
+
+    def __init__(self, pos: QPointF, color: QColor, width: float, number: int = 1) -> None:
+        super().__init__(color, width)
+        self.center = QPointF(pos)
+        self.number = number
+
+    def update_drag(self, pos: QPointF) -> None:
+        self.center = QPointF(pos)  # dragging positions the badge
+
+    def paint(self, p: QPainter) -> None:
+        r = badge_radius(self.width)
+        p.setPen(QPen(QColor("white"), max(1.5, r / 7)))
+        p.setBrush(QBrush(self.color))
+        p.drawEllipse(self.center, r, r)
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(max(9, int(r * (1.05 if self.number < 10 else 0.85))))
+        p.setFont(font)
+        light = (0.299 * self.color.red() + 0.587 * self.color.green() + 0.114 * self.color.blue()) > 170
+        p.setPen(QColor("black") if light else QColor("white"))
+        box = QRectF(self.center.x() - r, self.center.y() - r, 2 * r, 2 * r)
+        p.drawText(box, Qt.AlignmentFlag.AlignCenter, str(self.number))
+
+
 def create_annotation(kind: ToolKind, pos: QPointF, color: QColor, width: float) -> Annotation:
-    """Factory used by the overlay when a drag starts."""
+    """Factory used by the overlay when a drag starts.
+
+    ``TEXT`` is created by the overlay's inline editor instead. ``STEP`` badges
+    start at 1; the overlay renumbers them.
+    """
+    if kind is ToolKind.REDACT:
+        return RedactAnnotation(pos)
+    if kind is ToolKind.STEP:
+        return StepBadgeAnnotation(pos, color, width)
     classes = {
         ToolKind.ARROW: ArrowAnnotation,
         ToolKind.RECT: RectAnnotation,

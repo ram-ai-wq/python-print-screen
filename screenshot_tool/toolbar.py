@@ -45,6 +45,8 @@ QToolButton { background: transparent; border: 1px solid transparent; border-rad
 QToolButton:hover { background: rgba(255, 255, 255, 45); }
 QToolButton:checked { background: rgba(10, 132, 255, 210); }
 QToolButton:disabled { opacity: 0.4; }
+QToolButton#primary { background: rgba(10, 132, 255, 230); }
+QToolButton#primary:hover { background: rgba(64, 156, 255, 255); }
 """
 
 
@@ -77,6 +79,28 @@ def make_icon(name: str, size: int = ICON) -> QIcon:
         font.setBold(True)
         p.setFont(font)
         p.drawText(QRectF(0, 0, s, s), Qt.AlignmentFlag.AlignCenter, "T")
+    elif name == "redact":  # "hide": an eye with a slash through it
+        eye = QPainterPath(QPointF(2.5, s / 2))
+        eye.quadTo(QPointF(s / 2, 3), QPointF(s - 2.5, s / 2))
+        eye.quadTo(QPointF(s / 2, s - 3), QPointF(2.5, s / 2))
+        p.drawPath(eye)
+        p.setBrush(white)
+        p.drawEllipse(QPointF(s / 2, s / 2), 2.6, 2.6)
+        p.setPen(QPen(white, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(4, s - 3.5), QPointF(s - 4, 3.5))
+    elif name == "step":
+        p.drawEllipse(QRectF(2.5, 2.5, s - 5, s - 5))
+        font = QFont()
+        font.setPixelSize(12)
+        font.setBold(True)
+        p.setFont(font)
+        p.drawText(QRectF(0, 0, s, s), Qt.AlignmentFlag.AlignCenter, "1")
+    elif name == "check":
+        p.setPen(QPen(white, 2.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        path = QPainterPath(QPointF(4.5, 11.5))
+        path.lineTo(9, 16)
+        path.lineTo(17.5, 6)
+        p.drawPath(path)
     elif name in ("undo", "redo"):
         if name == "redo":
             p.translate(s, 0)
@@ -164,7 +188,8 @@ class ToolBar(QFrame):
         specs = [
             (ToolKind.ARROW, "Arrow"), (ToolKind.RECT, "Rectangle"),
             (ToolKind.PEN, "Pen"), (ToolKind.MARKER, "Highlighter"),
-            (ToolKind.TEXT, "Text"),
+            (ToolKind.TEXT, "Text"), (ToolKind.STEP, "Step number (1, 2, 3…)"),
+            (ToolKind.REDACT, "Redact – hide passwords or personal data"),
         ]
         for i, (kind, tip) in enumerate(specs):
             btn = _button(tip, make_icon(kind.value), checkable=True)
@@ -259,13 +284,18 @@ class ToolBar(QFrame):
 
 
 class ActionBar(QFrame):
-    """Horizontal panel: copy, save, close."""
+    """Horizontal panel: [primary action], copy, save, close.
 
+    The optional primary button (e.g. "Add evidence step") is highlighted and is
+    what Enter triggers in the overlay.
+    """
+
+    primaryRequested = pyqtSignal()
     copyRequested = pyqtSignal()
     saveRequested = pyqtSignal()
     closeRequested = pyqtSignal()
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, primary_tip: str = "") -> None:
         super().__init__(parent)
         self.setObjectName("panel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -273,6 +303,12 @@ class ActionBar(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(4)
+        self.primary: QToolButton | None = None
+        if primary_tip:
+            self.primary = _button(primary_tip, make_icon("check"))
+            self.primary.setObjectName("primary")
+            self.primary.clicked.connect(self.primaryRequested)
+            lay.addWidget(self.primary)
         for name, tip, sig in (
             ("copy", "Copy to clipboard (Ctrl+C)", self.copyRequested),
             ("save", "Save as… (Ctrl+S)", self.saveRequested),
